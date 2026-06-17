@@ -18,6 +18,29 @@ USE coffeeshop_db;
 -- for THAT SAME store (correlated subquery).
 -- Sort by store_name, then order_total DESC.
 
+
+select order_id,first_name,store_name,order_datetime,order_total
+from 
+(select o.order_id, c.first_name, s.name as store_name,s.store_id, o.order_datetime, SUM(oi.quantity * p.price) as order_total
+from orders o 
+join order_items oi on o.order_id = oi.order_id
+join customers c on o.customer_id = c.customer_id
+join products p on oi.product_id = p.product_id
+join stores s on o.store_id = s.store_id 
+where o.status = 'paid'
+group by o.order_id,c.first_name,s.store_id,store_name,o.order_datetime) dt
+where order_total > 
+(select avg(dt2.order_total)
+from 
+(select o2.store_id,sum(oi2.quantity * p2.price) as order_total
+from orders o2
+join order_items oi2 on o2.order_id = oi2.order_id
+join products p2 on oi2.product_id = p2.product_id
+where o2.status = 'paid'
+group by o2.order_id,o2.store_id) dt2
+where dt2.store_id = dt.store_id)
+order by store_name,order_total desc;
+
 -- =========================================================
 -- Q2) CTE: Daily revenue and 3-day rolling average (PAID only)
 -- =========================================================
@@ -29,6 +52,25 @@ USE coffeeshop_db;
 -- Use a window function for the rolling average.
 -- Sort by store_name, order_date.
 
+with daily_revenue as (
+select  o.store_id ,s.name as store_name ,DATE(o.order_datetime) order_date, SUM(oi.quantity * p.price) as revenue_day 
+from orders o
+join order_items oi on o.order_id = oi.order_id
+join stores s on o.store_id = s.store_id
+join products p on oi.product_id = p.product_id
+where o.status = 'paid'
+group by o.store_id, date(o.order_datetime)
+)
+select store_name,order_date, revenue_day,
+avg(revenue_day) over (
+        partition by store_id
+        order by order_date
+        rows between 2 preceding and current row) as rolling_3day_avg
+from daily_revenue
+order by store_name, order_date;
+
+
+
 -- =========================================================
 -- Q3) Window function: Rank customers by lifetime spend (PAID only)
 -- =========================================================
@@ -37,6 +79,20 @@ USE coffeeshop_db;
 --         spend_rank (DENSE_RANK by total_spend DESC).
 -- Also include percent_of_total = customer's total_spend / total spend of all customers.
 -- Sort by total_spend DESC.
+with customer_spend as (
+select c.customer_id , c.first_name , sum(p.price) as total_spend 
+from customers c 
+join orders o on o.customer_id = c.customer_id
+join order_items oi on oi.order_id = o.order_id 
+join products p on p.product_id = oi.product_id
+where o.status = 'paid' 
+group by c.customer_id,c.first_name)
+select customer_id, first_name,total_spend,
+dense_rank() over (order by total_spend desc) as spend_rank,
+total_spend / sum(total_spend) over () as percent_of_total
+from customer_spend
+order by total_spend desc;
+
 
 -- =========================================================
 -- Q4) CTE + window: Top product per store by revenue (PAID only)
@@ -54,6 +110,16 @@ USE coffeeshop_db;
 -- Return customers who have at least one PAID order in every store in the stores table.
 -- Return: customer_id, customer_name.
 -- Hint: Compare count(distinct store_id) per customer to (select count(*) from stores).
+
+
+select customer_id ,first_name from customers where customer_id in (
+select customer_id from orders where status = 'paid'
+group by customer_id
+having count(distinct store_id) = (
+select count(*) from stores));
+
+
+
 
 -- =========================================================
 -- Q6) Window function: Time between orders per customer (PAID only)
